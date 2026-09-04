@@ -3,6 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from ml_model.predict import predict_failure
+from backend.database import (
+    initialize_database,
+    save_prediction,
+    get_predictions,
+    delete_predictions
+)
 
 
 app = FastAPI(
@@ -11,6 +17,8 @@ app = FastAPI(
     version="1.0.0"
 )
 
+
+# Allow React frontend to communicate with FastAPI
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -21,6 +29,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Initialize database when API starts
+initialize_database()
 
 
 class MachineData(BaseModel):
@@ -45,9 +57,28 @@ def health_check():
         "status": "healthy"
     }
 
+@app.get("/predictions")
+def get_prediction_history():
+    predictions = get_predictions()
+
+    return {
+        "count": len(predictions),
+        "predictions": predictions
+    }
+
+@app.delete("/predictions")
+def clear_prediction_history():
+    delete_predictions()
+
+    return {
+        "message": "Prediction history cleared successfully.",
+        "status": "success"
+    }
 
 @app.post("/predict")
 def predict(machine: MachineData):
+
+    # Get prediction from ML model
     result = predict_failure(
         air_temperature=machine.air_temperature,
         process_temperature=machine.process_temperature,
@@ -56,11 +87,20 @@ def predict(machine: MachineData):
         tool_wear=machine.tool_wear
     )
 
-    result["maintenance_required"] = result["prediction"] == 1
+    # Save prediction to SQLite database
+    prediction_id = save_prediction(
+        air_temperature=machine.air_temperature,
+        process_temperature=machine.process_temperature,
+        rotational_speed=machine.rotational_speed,
+        torque=machine.torque,
+        tool_wear=machine.tool_wear,
+        prediction=result["prediction"],
+        failure_probability=result["failure_probability"],
+        risk_level=result["risk_level"],
+        maintenance_required=result["maintenance_required"]
+    )
 
-    if result["prediction"] == 1:
-        result["message"] = "Machine requires maintenance."
-    else:
-        result["message"] = "Machine is operating normally."
+    # Return database ID along with prediction
+    result["prediction_id"] = prediction_id
 
     return result

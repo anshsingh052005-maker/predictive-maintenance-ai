@@ -29,6 +29,7 @@ def predict_failure(
     # Failure prediction threshold
     FAILURE_THRESHOLD = 0.60
     prediction = int(probability >= FAILURE_THRESHOLD)
+    maintenance_required = prediction == 1
 
     # Determine risk level
         # Determine risk level
@@ -40,7 +41,8 @@ def predict_failure(
         risk = "LOW"
 
     return {
-        "prediction": int(prediction),
+        "prediction": prediction,
         "failure_probability": round(float(probability) * 100, 2),
-        "risk_level": risk
+        "risk_level": risk,
+        "maintenance_required": maintenance_required
     }

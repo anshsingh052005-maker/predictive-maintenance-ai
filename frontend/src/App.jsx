@@ -34,7 +34,6 @@ const LIMITS = {
   },
 };
 
-const HISTORY_KEY = "predictx_history";
 const MAX_HISTORY = 10;
 
 function App() {
@@ -52,18 +51,49 @@ function App() {
   const [apiError, setApiError] = useState("");
   const [history, setHistory] = useState([]);
 
-  // Load saved prediction history
-  useEffect(() => {
+  // Load prediction history from SQLite database
+useEffect(() => {
+  const loadHistory = async () => {
     try {
-      const savedHistory = localStorage.getItem(HISTORY_KEY);
+      const response = await fetch(
+        "http://127.0.0.1:8000/predictions"
+      );
 
-      if (savedHistory) {
-        setHistory(JSON.parse(savedHistory));
+      if (!response.ok) {
+        throw new Error("Failed to load prediction history.");
       }
-    } catch (error) {
-      console.error("Unable to load prediction history:", error);
+
+      const data = await response.json();
+
+      const formattedHistory = data.predictions.map((item) => ({
+        id: item.id,
+        timestamp: item.timestamp,
+
+        inputs: {
+          air_temperature: item.air_temperature,
+          process_temperature: item.process_temperature,
+          rotational_speed: item.rotational_speed,
+          torque: item.torque,
+          tool_wear: item.tool_wear,
+        },
+
+        prediction: item.prediction,
+        failure_probability: item.failure_probability,
+        risk_level: item.risk_level,
+        maintenance_required: Boolean(item.maintenance_required),
+      }));
+
+      setHistory(formattedHistory.slice(0, MAX_HISTORY));
+      } catch (error) {
+      console.error(
+        "Unable to load prediction history:",
+        error
+      );
     }
-  }, []);
+  };
+
+  loadHistory();
+}, []);
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -159,36 +189,36 @@ function App() {
 
       setResult(data);
 
-      // Create history record
-      const historyItem = {
-        id: Date.now(),
-        timestamp: new Date().toISOString(),
+      // Refresh history from database after successful prediction
+  const historyResponse = await fetch(
+    "http://127.0.0.1:8000/predictions"
+  );
 
-        inputs: {
-          air_temperature: Number(formData.air_temperature),
-          process_temperature: Number(formData.process_temperature),
-          rotational_speed: Number(formData.rotational_speed),
-          torque: Number(formData.torque),
-          tool_wear: Number(formData.tool_wear),
-        },
+  if (!historyResponse.ok) {
+    throw new Error("Prediction saved, but history could not be loaded.");
+  }
 
-        prediction: data.prediction,
-        failure_probability: data.failure_probability,
-        risk_level: data.risk_level,
-        maintenance_required: data.maintenance_required,
-      };
+  const historyData = await historyResponse.json();
 
-      const updatedHistory = [historyItem, ...history].slice(
-        0,
-        MAX_HISTORY
-      );
+  const formattedHistory = historyData.predictions.map((item) => ({
+    id: item.id,
+    timestamp: item.timestamp,
 
-      setHistory(updatedHistory);
+    inputs: {
+      air_temperature: item.air_temperature,
+      process_temperature: item.process_temperature,
+      rotational_speed: item.rotational_speed,
+      torque: item.torque,
+      tool_wear: item.tool_wear,
+    },
 
-      localStorage.setItem(
-        HISTORY_KEY,
-        JSON.stringify(updatedHistory)
-      );
+    prediction: item.prediction,
+    failure_probability: item.failure_probability,
+    risk_level: item.risk_level,
+    maintenance_required: Boolean(item.maintenance_required),
+  }));
+
+  setHistory(formattedHistory.slice(0, MAX_HISTORY));
     } catch (error) {
       setApiError(
         error.message ||
@@ -213,9 +243,28 @@ function App() {
     setApiError("");
   };
 
-  const clearHistory = () => {
-    setHistory([]);
-    localStorage.removeItem(HISTORY_KEY);
+  const clearHistory = async () => {
+    try {
+      const response = await fetch(
+        "http://127.0.0.1:8000/predictions",
+        {
+          method: "DELETE",
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error("Failed to clear prediction history.");
+      }
+
+      setHistory([]);
+      setResult(null);
+      setApiError("");
+    } catch (error) {
+      setApiError(
+        error.message ||
+          "Unable to clear prediction history. Make sure FastAPI is running."
+      );
+    }
   };
 
   const totalPredictions = history.length;
@@ -237,6 +286,52 @@ const averageProbability =
         ) / history.length
       ).toFixed(1)
     : "0.0";
+
+const normalCount = history.filter(
+  (item) => item.prediction === 0
+).length;
+
+const failureCount = history.filter(
+  (item) => item.prediction === 1
+).length;
+
+const lowRiskCount = history.filter(
+  (item) => item.risk_level === "LOW"
+).length;
+
+const mediumRiskCount = history.filter(
+  (item) => item.risk_level === "MEDIUM"
+).length;
+
+const failureRate =
+  totalPredictions > 0
+    ? ((failureCount / totalPredictions) * 100).toFixed(1)
+    : "0.0";
+
+const normalPercentage =
+  totalPredictions > 0
+    ? ((normalCount / totalPredictions) * 100).toFixed(1)
+    : "0";
+
+const failurePercentage =
+  totalPredictions > 0
+    ? ((failureCount / totalPredictions) * 100).toFixed(1)
+    : "0";
+
+const lowRiskPercentage =
+  totalPredictions > 0
+    ? ((lowRiskCount / totalPredictions) * 100).toFixed(1)
+    : "0";
+
+const mediumRiskPercentage =
+  totalPredictions > 0
+    ? ((mediumRiskCount / totalPredictions) * 100).toFixed(1)
+    : "0";
+
+const highRiskPercentage =
+  totalPredictions > 0
+    ? ((highRiskCount / totalPredictions) * 100).toFixed(1)
+    : "0";
 
   const getRiskClass = (risk) => {
     if (risk === "HIGH") return "risk-high";
@@ -571,7 +666,9 @@ const averageProbability =
                       : "message-safe"
                   }`}
                 >
-                  {result.message}
+                  {result.prediction === 1
+                    ? "Machine requires maintenance."
+                    : "Machine is operating normally."}
                 </div>
               </div>
             )}
@@ -672,6 +769,131 @@ const averageProbability =
           )}
         </section>
 
+        {/* Analytics */}
+        <section className="analytics-grid">
+          {/* Failure Distribution */}
+          <div className="card analytics-card">
+            <div className="card-header">
+              <div>
+                <p className="section-label">ANALYTICS</p>
+                <h3>Prediction Distribution</h3>
+              </div>
+            </div>
+
+            {history.length === 0 ? (
+              <div className="analytics-empty">
+                Run predictions to generate analytics.
+              </div>
+            ) : (
+              <div className="chart-content">
+                <div className="metric-row">
+                  <div className="metric-label">
+                    <span>Normal</span>
+                    <strong>{normalCount}</strong>
+                  </div>
+
+                  <div className="bar-track">
+                    <div
+                      className="bar-normal"
+                      style={{ width: `${normalPercentage}%` }}
+                    ></div>
+                  </div>
+
+                  <small>{normalPercentage}%</small>
+                </div>
+
+                <div className="metric-row">
+                  <div className="metric-label">
+                    <span>Failure</span>
+                    <strong>{failureCount}</strong>
+                  </div>
+
+                  <div className="bar-track">
+                    <div
+                      className="bar-failure"
+                      style={{ width: `${failurePercentage}%` }}
+                    ></div>
+                  </div>
+
+                  <small>{failurePercentage}%</small>
+                </div>
+
+                <div className="failure-rate-box">
+                  <span>Overall Failure Rate</span>
+                  <strong>{failureRate}%</strong>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Risk Distribution */}
+          <div className="card analytics-card">
+            <div className="card-header">
+              <div>
+                <p className="section-label">RISK ANALYSIS</p>
+                <h3>Risk Distribution</h3>
+              </div>
+            </div>
+
+            {history.length === 0 ? (
+              <div className="analytics-empty">
+                Run predictions to generate risk analytics.
+              </div>
+            ) : (
+              <div className="chart-content">
+                <div className="metric-row">
+                  <div className="metric-label">
+                    <span>LOW</span>
+                    <strong>{lowRiskCount}</strong>
+                  </div>
+
+                  <div className="bar-track">
+                    <div
+                      className="bar-low"
+                      style={{ width: `${lowRiskPercentage}%` }}
+                    ></div>
+                  </div>
+
+                  <small>{lowRiskPercentage}%</small>
+                </div>
+
+                <div className="metric-row">
+                  <div className="metric-label">
+                    <span>MEDIUM</span>
+                    <strong>{mediumRiskCount}</strong>
+                  </div>
+
+                  <div className="bar-track">
+                    <div
+                      className="bar-medium"
+                      style={{ width: `${mediumRiskPercentage}%` }}
+                    ></div>
+                  </div>
+
+                  <small>{mediumRiskPercentage}%</small>
+                </div>
+
+                <div className="metric-row">
+                  <div className="metric-label">
+                    <span>HIGH</span>
+                    <strong>{highRiskCount}</strong>
+                  </div>
+
+                  <div className="bar-track">
+                    <div
+                      className="bar-high"
+                      style={{ width: `${highRiskPercentage}%` }}
+                    ></div>
+                  </div>
+
+                  <small>{highRiskPercentage}%</small>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* Statistics */}
         <section className="stats-row">
           <div className="stat-card">
             <span>TOTAL PREDICTIONS</span>
@@ -697,6 +919,8 @@ const averageProbability =
             <small>Across all predictions</small>
           </div>
         </section>
+
+
       </main>
 
       <footer>
